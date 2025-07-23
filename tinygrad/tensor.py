@@ -1266,13 +1266,24 @@ class Tensor(MathTrait):
     if not isinstance(v, Tensor): raise TypeError(f"can't set a {type(v).__name__} to a Tensor")
     if self.requires_grad or v.requires_grad: raise NotImplementedError("setitem with requires_grad is not supported")
 
-    res = self.realize()._getitem(indices, v)
-    # if shapes match and data is not shared it's a copy and we assign to self
-    if res.shape == self.shape and res.uop is not self.uop:
-      self.assign(res).realize()
-    else: # no copy, basic setitem
+    # convert pure element access to advanced indexing for lazy evaluation
+    if isinstance(indices, int): indices = Tensor([indices])
+    elif isinstance(indices, tuple) and all(isinstance(idx, int) for idx in indices): indices = tuple(Tensor([idx]) for idx in indices)
+    else:
+      # slice ops use original path with realize
+      res = self.realize()._getitem(indices, v)
+      if res.shape == self.shape and res.uop is not self.uop: self.assign(res).realize()
+      else:
+        v = v.cast(res.dtype)._broadcast_to(_broadcast_shape(res.shape, v.shape)).contiguous()
+        res.assign(v).realize()
+      return
+
+    # lazy path for element access
+    res = self._getitem(indices, v)
+    if res.shape == self.shape and res.uop is not self.uop: self.assign(res)
+    else:
       v = v.cast(res.dtype)._broadcast_to(_broadcast_shape(res.shape, v.shape)).contiguous()
-      res.assign(v).realize()
+      res.assign(v)
 
   def gather(self:Tensor, dim:int, index:Tensor) -> Tensor:
     """
